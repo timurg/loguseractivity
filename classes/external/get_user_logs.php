@@ -1,6 +1,6 @@
 
 <?php
-namespace loguseractivity\external;
+namespace local_loguseractivity\external;
 
 use core_external\external_api;
 use core_external\external_function_parameters;
