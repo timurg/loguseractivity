@@ -31,12 +31,11 @@ class get_user_logs extends external_api {
             'timefrom'  => new external_value(PARAM_INT, 'С какого времени (unix timestamp)', VALUE_DEFAULT, 0),
             'timeto'    => new external_value(PARAM_INT, 'По какое время (unix timestamp)', VALUE_DEFAULT, 0),
             'limit'     => new external_value(PARAM_INT, 'Максимум записей', VALUE_DEFAULT, 500),
-            'full'      => new external_value(PARAM_BOOL, 'Полный формат', VALUE_DEFAULT, false),
         ]);
     }
 
-    public static function execute($userid, $courseid, $timefrom = 0, $timeto = 0, $limit = 500, $full = false) {
-        global $DB, $CFG;
+    public static function execute($userid, $courseid, $timefrom = 0, $timeto = 0, $limit = 500) {
+        global $DB;
 
         $params = self::validate_parameters(self::execute_parameters(), [
             'userid'   => $userid,
@@ -44,20 +43,24 @@ class get_user_logs extends external_api {
             'timefrom' => $timefrom,
             'timeto'   => $timeto,
             'limit'    => $limit,
-            'full'     => $full,
         ]);
 
         $context = \context_course::instance($params['courseid']);
         self::validate_context($context);
         require_capability('report/log:view', $context);
 
-        // Основной SQL
-        $sql = "SELECT l.*, 
-                       COALESCE(cm.name, m.name) as activityname
+        // Упрощённый и стабильный запрос
+        $sql = "SELECT l.id, l.timecreated, l.action, l.component, l.target, 
+                       l.objectid, l.crud, l.edulevel, l.contextlevel, 
+                       l.contextinstanceid, l.ip, l.info,
+                       cm.id AS cmid,
+                       m.name AS modulename
                 FROM {logstore_standard_log} l
-                LEFT JOIN {course_modules} cm ON cm.id = l.contextinstanceid 
-                    AND l.contextlevel = 70
-                LEFT JOIN {modules} m ON m.id = cm.module
+                LEFT JOIN {course_modules} cm 
+                       ON cm.id = l.contextinstanceid 
+                      AND l.contextlevel = 70
+                LEFT JOIN {modules} m 
+                       ON m.id = cm.module
                 WHERE l.courseid = :courseid 
                   AND l.userid = :userid";
 
@@ -91,20 +94,15 @@ class get_user_logs extends external_api {
                 'target'      => $log->target ?? '',
                 'objectid'    => (int)$log->objectid,
                 'crud'        => $log->crud,
-                'edulevel'    => (int)$log->edulevel,
-                'activityname'=> $log->activityname ?? '',
+                'modulename'  => $log->modulename ?? '',     // тип активности (resource, page, quiz...)
+                'cmid'        => $log->cmid ? (int)$log->cmid : 0,
                 'ip'          => $log->ip ?? '',
             ];
 
-            if ($params['full']) {
-                $entry['contextlevel'] = (int)$log->contextlevel;
-                $entry['contextinstanceid'] = (int)$log->contextinstanceid;
-                $entry['info'] = $log->info ?? '';
-            }
-
             $resultlogs[] = $entry;
 
-            if (in_array($log->action, ['viewed', 'viewed course', 'submitted', 'started'])) {
+            // Определяем, было ли реальное взаимодействие
+            if (in_array($log->action, ['viewed', 'viewed course', 'submitted', 'started', 'answered', 'attempted'])) {
                 $has_viewed = true;
             }
         }
@@ -123,7 +121,7 @@ class get_user_logs extends external_api {
             'userid'        => new external_value(PARAM_INT, 'ID пользователя'),
             'courseid'      => new external_value(PARAM_INT, 'ID курса'),
             'total_logs'    => new external_value(PARAM_INT, 'Количество записей'),
-            'has_viewed_any'=> new external_value(PARAM_BOOL, 'Было ли хоть одно взаимодействие'),
+            'has_viewed_any'=> new external_value(PARAM_BOOL, 'Было ли взаимодействие'),
             'logs'          => new external_multiple_structure(
                 new external_single_structure([
                     'timecreated' => new external_value(PARAM_INT, 'Unix timestamp'),
@@ -133,8 +131,8 @@ class get_user_logs extends external_api {
                     'target'      => new external_value(PARAM_TEXT, 'Target'),
                     'objectid'    => new external_value(PARAM_INT, 'ID объекта'),
                     'crud'        => new external_value(PARAM_TEXT, 'CRUD'),
-                    'edulevel'    => new external_value(PARAM_INT, 'Edu level'),
-                    'activityname'=> new external_value(PARAM_TEXT, 'Название активности'),
+                    'modulename'  => new external_value(PARAM_TEXT, 'Тип активности (resource, quiz и т.д.)'),
+                    'cmid'        => new external_value(PARAM_INT, 'ID course module'),
                     'ip'          => new external_value(PARAM_TEXT, 'IP адрес'),
                 ])
             ),
