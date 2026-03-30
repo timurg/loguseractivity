@@ -1,5 +1,19 @@
-
 <?php
+// This file is part of Moodle - http://moodle.org/
+//
+// Moodle is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Moodle is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
+
 namespace local_loguseractivity\external;
 
 use core_external\external_api;
@@ -16,30 +30,35 @@ class get_user_logs extends external_api {
             'courseid'  => new external_value(PARAM_INT, 'ID курса'),
             'timefrom'  => new external_value(PARAM_INT, 'С какого времени (unix timestamp)', VALUE_DEFAULT, 0),
             'timeto'    => new external_value(PARAM_INT, 'По какое время (unix timestamp)', VALUE_DEFAULT, 0),
-            'limit'     => new external_value(PARAM_INT, 'Максимум записей (рекомендуется 500-1000)', VALUE_DEFAULT, 500),
-            'full'      => new external_value(PARAM_BOOL, 'Полный формат (все поля)', VALUE_DEFAULT, false),
+            'limit'     => new external_value(PARAM_INT, 'Максимум записей', VALUE_DEFAULT, 500),
+            'full'      => new external_value(PARAM_BOOL, 'Полный формат', VALUE_DEFAULT, false),
         ]);
     }
 
     public static function execute($userid, $courseid, $timefrom = 0, $timeto = 0, $limit = 500, $full = false) {
-        global $DB;
+        global $DB, $CFG;
 
         $params = self::validate_parameters(self::execute_parameters(), [
-            'userid' => $userid, 'courseid' => $courseid,
-            'timefrom' => $timefrom, 'timeto' => $timeto,
-            'limit' => $limit, 'full' => $full,
+            'userid'   => $userid,
+            'courseid' => $courseid,
+            'timefrom' => $timefrom,
+            'timeto'   => $timeto,
+            'limit'    => $limit,
+            'full'     => $full,
         ]);
 
         $context = \context_course::instance($params['courseid']);
         self::validate_context($context);
-        require_capability('report/log:view', $context);   // точно как у куратора
+        require_capability('report/log:view', $context);
 
+        // Основной SQL
         $sql = "SELECT l.*, 
                        COALESCE(cm.name, m.name) as activityname
                 FROM {logstore_standard_log} l
-                LEFT JOIN {course_modules} cm ON cm.id = l.contextinstanceid AND l.contextlevel = 70
+                LEFT JOIN {course_modules} cm ON cm.id = l.contextinstanceid 
+                    AND l.contextlevel = 70
                 LEFT JOIN {modules} m ON m.id = cm.module
-                WHERE l.courseid = :courseid
+                WHERE l.courseid = :courseid 
                   AND l.userid = :userid";
 
         $sqlparams = [
@@ -65,31 +84,27 @@ class get_user_logs extends external_api {
 
         foreach ($logs as $log) {
             $entry = [
-                'timecreated' => $log->timecreated,
-                'time'        => userdate($log->timecreated), // human-readable
+                'timecreated' => (int)$log->timecreated,
+                'time'        => userdate($log->timecreated),
                 'action'      => $log->action,
                 'component'   => $log->component,
-                'target'      => $log->target,
-                'objectid'    => $log->objectid,
+                'target'      => $log->target ?? '',
+                'objectid'    => (int)$log->objectid,
                 'crud'        => $log->crud,
-                'edulevel'    => $log->edulevel,
+                'edulevel'    => (int)$log->edulevel,
                 'activityname'=> $log->activityname ?? '',
-                'ip'          => $log->ip,
+                'ip'          => $log->ip ?? '',
             ];
 
             if ($params['full']) {
-                $entry += [
-                    'contextlevel' => $log->contextlevel,
-                    'contextinstanceid' => $log->contextinstanceid,
-                    'origin' => $log->origin,
-                    'realuserid' => $log->realuserid,
-                    'info' => $log->info,
-                ];
+                $entry['contextlevel'] = (int)$log->contextlevel;
+                $entry['contextinstanceid'] = (int)$log->contextinstanceid;
+                $entry['info'] = $log->info ?? '';
             }
 
             $resultlogs[] = $entry;
 
-            if (in_array($log->action, ['viewed', 'viewed course', 'submitted'])) {
+            if (in_array($log->action, ['viewed', 'viewed course', 'submitted', 'started'])) {
                 $has_viewed = true;
             }
         }
@@ -107,20 +122,20 @@ class get_user_logs extends external_api {
         return new external_single_structure([
             'userid'        => new external_value(PARAM_INT, 'ID пользователя'),
             'courseid'      => new external_value(PARAM_INT, 'ID курса'),
-            'total_logs'    => new external_value(PARAM_INT, 'Общее количество записей'),
-            'has_viewed_any'=> new external_value(PARAM_BOOL, 'Просматривал ли что-то в курсе'),
+            'total_logs'    => new external_value(PARAM_INT, 'Количество записей'),
+            'has_viewed_any'=> new external_value(PARAM_BOOL, 'Было ли хоть одно взаимодействие'),
             'logs'          => new external_multiple_structure(
                 new external_single_structure([
                     'timecreated' => new external_value(PARAM_INT, 'Unix timestamp'),
-                    'time'        => new external_value(PARAM_TEXT, 'Читаемая дата'),
+                    'time'        => new external_value(PARAM_TEXT, 'Дата и время'),
                     'action'      => new external_value(PARAM_TEXT, 'Действие'),
                     'component'   => new external_value(PARAM_TEXT, 'Компонент'),
-                    'target'      => new external_value(PARAM_TEXT, 'Цель'),
+                    'target'      => new external_value(PARAM_TEXT, 'Target'),
                     'objectid'    => new external_value(PARAM_INT, 'ID объекта'),
                     'crud'        => new external_value(PARAM_TEXT, 'CRUD'),
-                    'edulevel'    => new external_value(PARAM_INT, 'Уровень обучения'),
+                    'edulevel'    => new external_value(PARAM_INT, 'Edu level'),
                     'activityname'=> new external_value(PARAM_TEXT, 'Название активности'),
-                    'ip'          => new external_value(PARAM_TEXT, 'IP'),
+                    'ip'          => new external_value(PARAM_TEXT, 'IP адрес'),
                 ])
             ),
         ]);
