@@ -1,18 +1,5 @@
 <?php
 // This file is part of Moodle - http://moodle.org/
-//
-// Moodle is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// Moodle is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
 
 namespace local_loguseractivity\external;
 
@@ -49,18 +36,14 @@ class get_user_logs extends external_api {
         self::validate_context($context);
         require_capability('report/log:view', $context);
 
-        // Упрощённый и стабильный запрос
-        $sql = "SELECT l.id, l.timecreated, l.action, l.component, l.target, 
-                       l.objectid, l.crud, l.edulevel, l.contextlevel, 
-                       l.contextinstanceid, l.ip, l.info,
+        // Самый стабильный запрос — без попыток достать название активности через COALESCE
+        $sql = "SELECT l.id, l.timecreated, l.action, l.component, l.target, l.objectid, 
+                       l.crud, l.edulevel, l.contextlevel, l.contextinstanceid, l.ip, l.info,
                        cm.id AS cmid,
                        m.name AS modulename
                 FROM {logstore_standard_log} l
-                LEFT JOIN {course_modules} cm 
-                       ON cm.id = l.contextinstanceid 
-                      AND l.contextlevel = 70
-                LEFT JOIN {modules} m 
-                       ON m.id = cm.module
+                LEFT JOIN {course_modules} cm ON cm.id = l.contextinstanceid AND l.contextlevel = 70
+                LEFT JOIN {modules} m ON m.id = cm.module
                 WHERE l.courseid = :courseid 
                   AND l.userid = :userid";
 
@@ -94,15 +77,15 @@ class get_user_logs extends external_api {
                 'target'      => $log->target ?? '',
                 'objectid'    => (int)$log->objectid,
                 'crud'        => $log->crud,
-                'modulename'  => $log->modulename ?? '',     // тип активности (resource, page, quiz...)
-                'cmid'        => $log->cmid ? (int)$log->cmid : 0,
+                'modulename'  => $log->modulename ?? '',   // resource, page, quiz, forum и т.д.
+                'cmid'        => isset($log->cmid) ? (int)$log->cmid : 0,
                 'ip'          => $log->ip ?? '',
+                'info'        => $log->info ?? '',
             ];
 
             $resultlogs[] = $entry;
 
-            // Определяем, было ли реальное взаимодействие
-            if (in_array($log->action, ['viewed', 'viewed course', 'submitted', 'started', 'answered', 'attempted'])) {
+            if (in_array($log->action, ['viewed', 'viewed course', 'submitted', 'started', 'answered', 'attempted', 'uploaded'])) {
                 $has_viewed = true;
             }
         }
@@ -121,7 +104,7 @@ class get_user_logs extends external_api {
             'userid'        => new external_value(PARAM_INT, 'ID пользователя'),
             'courseid'      => new external_value(PARAM_INT, 'ID курса'),
             'total_logs'    => new external_value(PARAM_INT, 'Количество записей'),
-            'has_viewed_any'=> new external_value(PARAM_BOOL, 'Было ли взаимодействие'),
+            'has_viewed_any'=> new external_value(PARAM_BOOL, 'Было ли хоть одно взаимодействие'),
             'logs'          => new external_multiple_structure(
                 new external_single_structure([
                     'timecreated' => new external_value(PARAM_INT, 'Unix timestamp'),
@@ -131,9 +114,9 @@ class get_user_logs extends external_api {
                     'target'      => new external_value(PARAM_TEXT, 'Target'),
                     'objectid'    => new external_value(PARAM_INT, 'ID объекта'),
                     'crud'        => new external_value(PARAM_TEXT, 'CRUD'),
-                    'modulename'  => new external_value(PARAM_TEXT, 'Тип активности (resource, quiz и т.д.)'),
-                    'cmid'        => new external_value(PARAM_INT, 'ID course module'),
-                    'ip'          => new external_value(PARAM_TEXT, 'IP адрес'),
+                    'modulename'  => new external_value(PARAM_TEXT, 'Тип модуля'),
+                    'cmid'        => new external_value(PARAM_INT, 'ID элемента курса'),
+                    'ip'          => new external_value(PARAM_TEXT, 'IP'),
                 ])
             ),
         ]);
