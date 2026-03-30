@@ -3,7 +3,7 @@
 //
 // MIT License
 //
-// Copyright (c) 2026 Your Name / Organization
+// Copyright (c) 2026 Timur Girfanov/ Proznanie
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -38,7 +38,7 @@ class get_user_logs extends external_api {
             'userid'    => new external_value(PARAM_INT, 'ID пользователя'),
             'courseid'  => new external_value(PARAM_INT, 'ID курса'),
             'timefrom'  => new external_value(PARAM_INT, 'С какого времени (unix timestamp)', VALUE_DEFAULT, 0),
-            'timeto'    => new external_value(PARAM_INT, 'По какое время', VALUE_DEFAULT, 0),
+            'timeto'    => new external_value(PARAM_INT, 'По какое время (unix timestamp)', VALUE_DEFAULT, 0),
             'limit'     => new external_value(PARAM_INT, 'Максимум записей', VALUE_DEFAULT, 800),
         ]);
     }
@@ -47,24 +47,39 @@ class get_user_logs extends external_api {
         global $DB;
 
         $params = self::validate_parameters(self::execute_parameters(), [
-            'userid' => $userid, 'courseid' => $courseid,
-            'timefrom' => $timefrom, 'timeto' => $timeto, 'limit' => $limit,
+            'userid'   => $userid,
+            'courseid' => $courseid,
+            'timefrom' => $timefrom,
+            'timeto'   => $timeto,
+            'limit'    => $limit,
         ]);
 
         $context = \context_course::instance($params['courseid']);
         self::validate_context($context);
         require_capability('report/log:view', $context);
 
-        // Получаем все логи
-        $sql = "SELECT l.id, l.timecreated, l.eventname, l.component, l.action, l.target,
-                       l.objectid, l.crud, l.contextlevel, l.contextinstanceid, l.ip,
-                       cm.id AS cmid, cm.instance AS instanceid, m.name AS modulename,
-                       s.name AS section_name, s.section AS section_number
+        $sql = "SELECT 
+                    l.timecreated,
+                    l.eventname,
+                    l.component,
+                    l.action,
+                    l.target,
+                    l.objectid,
+                    l.crud,
+                    l.contextlevel,
+                    l.contextinstanceid,
+                    l.ip,
+                    cm.id AS cmid,
+                    cm.instance AS instanceid,
+                    m.name AS modulename,
+                    s.name AS section_name,
+                    s.section AS section_number
                 FROM {logstore_standard_log} l
                 LEFT JOIN {course_modules} cm ON cm.id = l.contextinstanceid AND l.contextlevel = 70
                 LEFT JOIN {modules} m ON m.id = cm.module
                 LEFT JOIN {course_sections} s ON s.id = cm.section
-                WHERE l.courseid = :courseid AND l.userid = :userid";
+                WHERE l.courseid = :courseid 
+                  AND l.userid = :userid";
 
         $sqlparams = ['courseid' => $params['courseid'], 'userid' => $params['userid']];
 
@@ -81,7 +96,7 @@ class get_user_logs extends external_api {
 
         $logs = $DB->get_records_sql($sql, $sqlparams);
 
-        // Загружаем всю информацию о модулях курса один раз (самый эффективный способ)
+        // Загружаем информацию о всех модулях курса один раз (самый надёжный способ)
         $modinfo = get_fast_modinfo($params['courseid']);
 
         $resultlogs = [];
@@ -89,43 +104,38 @@ class get_user_logs extends external_api {
 
         foreach ($logs as $log) {
             $activity_name = 'Элемент курса';
-            $section_name  = $log->section_name ?: 'Без раздела';
+            $section_name  = !empty($log->section_name) ? $log->section_name : 'Без раздела';
 
-            if ($log->cmid && isset($modinfo->cms[$log->cmid])) {
+            if (!empty($log->cmid) && isset($modinfo->cms[$log->cmid])) {
                 $cm = $modinfo->cms[$log->cmid];
-                $activity_name = $cm->get_formatted_name();   // Самое надёжное название
-                if (empty($activity_name)) {
-                    $activity_name = $cm->name ?? ($log->modulename ? ucfirst($log->modulename) : 'Элемент');
-                }
+                $activity_name = format_string($cm->get_formatted_name(), true, ['context' => $cm->context]);
             }
 
-            // Формируем красивую human-readable строку
-            $readable = '';
-            if ($log->action === 'viewed' || $log->action === 'viewed course') {
-                if ($log->target === 'course') {
-                    $readable = "Просмотрел курс";
-                } else {
-                    $readable = "Просмотрел «{$activity_name}»";
-                    if ($section_name !== 'Без раздела') {
-                        $readable .= " в разделе «{$section_name}»";
-                    }
+            // Формируем human-readable описание
+            if ($log->target === 'course' || $log->action === 'viewed course') {
+                $readable = "Просмотрел курс";
+            } elseif ($log->action === 'viewed') {
+                $readable = "Просмотрел «{$activity_name}»";
+                if ($section_name !== 'Без раздела') {
+                    $readable .= " в разделе «{$section_name}»";
                 }
-            } else if (in_array($log->action, ['submitted', 'started', 'answered', 'attempted'])) {
-                $readable = "Взаимодействовал с «{$activity_name}»";
             } else {
                 $readable = ucfirst($log->action) . " «{$activity_name}»";
             }
 
+            // UTC в ISO 8601 формате (с Z)
+            $time_utc = gmdate('Y-m-d\TH:i:s\Z', $log->timecreated);
+
             $entry = [
-                'time'              => userdate($log->timecreated, '%d %B %Y, %H:%M'),
-                'timestamp'         => (int)$log->timecreated,
-                'readable_action'   => $readable,                    // ← Главное поле для ИИ
-                'activity_name'     => $activity_name,
-                'section_name'      => $section_name,
-                'section_number'    => (int)$log->section_number,
-                'activity_type'     => $log->modulename ?: '',
-                'cmid'              => (int)$log->cmid,
-                'ip'                => $log->ip ?? '',
+                'time_utc'        => $time_utc,                    // ← ISO UTC
+                'timestamp'       => (int)$log->timecreated,
+                'readable_action' => $readable,                    // ← Главное удобное поле для ИИ
+                'activity_name'   => $activity_name,
+                'section_name'    => $section_name,
+                'section_number'  => (int)$log->section_number,
+                'activity_type'   => $log->modulename ?? '',
+                'cmid'            => (int)($log->cmid ?? 0),
+                'ip'              => $log->ip ?? '',
             ];
 
             $resultlogs[] = $entry;
@@ -144,7 +154,6 @@ class get_user_logs extends external_api {
         ];
     }
 
-    // execute_returns() остаётся почти таким же, только добавляем новое поле
     public static function execute_returns() {
         return new external_single_structure([
             'userid'          => new external_value(PARAM_INT, 'ID пользователя'),
@@ -153,15 +162,15 @@ class get_user_logs extends external_api {
             'has_viewed_any'  => new external_value(PARAM_BOOL, 'Было ли взаимодействие'),
             'logs'            => new external_multiple_structure(
                 new external_single_structure([
-                    'time'            => new external_value(PARAM_TEXT, 'Дата и время'),
+                    'time_utc'        => new external_value(PARAM_TEXT, 'Дата и время в UTC ISO 8601 (Z)'),
                     'timestamp'       => new external_value(PARAM_INT, 'Unix timestamp'),
-                    'readable_action' => new external_value(PARAM_TEXT, 'Читаемое описание действия (для ИИ)'),
+                    'readable_action' => new external_value(PARAM_TEXT, 'Читаемое описание действия'),
                     'activity_name'   => new external_value(PARAM_TEXT, 'Название элемента'),
                     'section_name'    => new external_value(PARAM_TEXT, 'Название раздела'),
                     'section_number'  => new external_value(PARAM_INT, 'Номер раздела'),
                     'activity_type'   => new external_value(PARAM_TEXT, 'Тип активности'),
                     'cmid'            => new external_value(PARAM_INT, 'ID course module'),
-                    'ip'              => new external_value(PARAM_TEXT, 'IP'),
+                    'ip'              => new external_value(PARAM_TEXT, 'IP адрес'),
                 ])
             ),
         ]);
